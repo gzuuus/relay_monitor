@@ -1,0 +1,14 @@
+# Nostr Relay Monitor Configuration Example
+# Rename this file to config.yaml and adjust values as needed
+
+# List of Nostr relays to monitor
+relays:
+  - wss://relay1.com
+  - wss://relay2.com
+  - wss://relay3.com
+
+# Interval between fetch cycles (in minutes)
+fetch_interval_minutes: 5
+
+# Path to the DuckDB database file
+database_path: ./nostr_events.db
