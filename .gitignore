@@ -1,3 +1,4 @@
-nostr_events.db
+*.db
+*.wal
 .roo
 config.yaml

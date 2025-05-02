@@ -9,15 +9,12 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-
 type MCPServer struct {
 	analytics *Analytics
 	server    *server.MCPServer
 }
 
-
 func NewMCPServer(analytics *Analytics) *MCPServer {
-	
 	s := server.NewMCPServer(
 		"Nostr Relay Analytics",
 		"1.0.0",
@@ -31,20 +28,15 @@ func NewMCPServer(analytics *Analytics) *MCPServer {
 		server:    s,
 	}
 
-	
 	mcpServer.registerTools()
-
 	return mcpServer
 }
-
 
 func (m *MCPServer) StartStdio() error {
 	return server.ServeStdio(m.server)
 }
 
-
 func (m *MCPServer) registerTools() {
-	
 	m.server.AddTool(
 		mcp.NewTool("event_count_by_kind",
 			mcp.WithDescription("Get count of Nostr events grouped by kind with time filter"),
@@ -103,38 +95,34 @@ func (m *MCPServer) registerTools() {
 	)
 }
 
-
 func jsonResult(data any) (*mcp.CallToolResult, error) {
 	jsonData, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Error serializing results: %v", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("error serializing results: %v", err)), nil
 	}
 	return mcp.NewToolResultText(string(jsonData)), nil
 }
-
 
 func getTimeFilter(request mcp.CallToolRequest) TimeFilter {
 	timeFilterStr, ok := getStringParam(request, "time_filter")
 	if !ok || timeFilterStr == "" {
 		return AllTime
 	}
-	
+
 	return TimeFilter(timeFilterStr)
 }
-
 
 func (m *MCPServer) handleEventCountByKind(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	timeFilter := getTimeFilter(request)
 	
 	counts, err := m.analytics.EventCountByKindWithTimeFilter(ctx, timeFilter)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Error: %v", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("error getting event counts: %v", err)), nil
 	}
 
-	
-	var results []map[string]interface{}
+	var results []map[string]any
 	for kind, count := range counts {
-		results = append(results, map[string]interface{}{
+		results = append(results, map[string]any{
 			"kind":  kind,
 			"count": count,
 		})
@@ -142,7 +130,6 @@ func (m *MCPServer) handleEventCountByKind(ctx context.Context, request mcp.Call
 
 	return jsonResult(results)
 }
-
 
 func getIntParam(request mcp.CallToolRequest, paramName string, defaultValue int) int {
 	if paramValue, ok := request.Params.Arguments[paramName]; ok {
@@ -153,32 +140,26 @@ func getIntParam(request mcp.CallToolRequest, paramName string, defaultValue int
 	return defaultValue
 }
 
-
 func (m *MCPServer) handleTopAuthors(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	limit := getIntParam(request, "limit", 10)
 	timeFilter := getTimeFilter(request)
-	
-	// Check if kind parameter is provided
 	kindPtr := getOptionalIntParam(request, "kind")
 	
 	var authors []AuthorStats
 	var err error
 	
 	if kindPtr != nil {
-		// If kind is specified, use TopAuthorsByKind
 		authors, err = m.analytics.TopAuthorsByKind(ctx, *kindPtr, limit, timeFilter)
 	} else {
-		// Otherwise use TopAuthors
 		authors, err = m.analytics.TopAuthors(ctx, limit, timeFilter)
 	}
 	
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Error: %v", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("error getting top authors: %v", err)), nil
 	}
 
 	return jsonResult(authors)
 }
-
 
 func getStringParam(request mcp.CallToolRequest, paramName string) (string, bool) {
 	if paramValue, ok := request.Params.Arguments[paramName]; ok {
@@ -188,10 +169,6 @@ func getStringParam(request mcp.CallToolRequest, paramName string) (string, bool
 	}
 	return "", false
 }
-
-
-
-
 
 func getOptionalIntParam(request mcp.CallToolRequest, paramName string) *int {
 	if paramValue, ok := request.Params.Arguments[paramName]; ok {
@@ -203,36 +180,30 @@ func getOptionalIntParam(request mcp.CallToolRequest, paramName string) *int {
 	return nil
 }
 
-
 func (m *MCPServer) handleEventCountByTime(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	interval, ok := getStringParam(request, "interval")
 	if !ok {
-		return mcp.NewToolResultError("Missing or invalid interval parameter"), nil
+		return mcp.NewToolResultError("missing or invalid interval parameter"), nil
 	}
 
 	limit := getIntParam(request, "limit", 20)
-	
-	// Get optional kind parameter
 	kindPtr := getOptionalIntParam(request, "kind")
 
 	counts, err := m.analytics.EventCountByTimeRange(ctx, interval, limit, kindPtr)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Error: %v", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("error getting event counts by time: %v", err)), nil
 	}
 
 	return jsonResult(counts)
 }
-
 
 func (m *MCPServer) handleRelayStats(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	timeFilter := getTimeFilter(request)
 
 	stats, err := m.analytics.RelayStats(ctx, timeFilter)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Error: %v", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("error getting relay stats: %v", err)), nil
 	}
 
 	return jsonResult(stats)
 }
-
-

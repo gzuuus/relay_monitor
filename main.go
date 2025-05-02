@@ -84,11 +84,10 @@ func NewScheduler(config *Config, stateMgr *StateManager, db *sql.DB) *Scheduler
 }
 
 func (s *Scheduler) Start() {
-	log.Printf("Starting scheduler with interval: %v", s.config.GetFetchIntervalDuration())
+	log.Printf("[SCHEDULER] starting with interval: %v", s.config.GetFetchIntervalDuration())
 	ticker := time.NewTicker(s.config.GetFetchIntervalDuration())
 
 	s.wg.Add(1)
-
 	go func() {
 		defer s.wg.Done()
 		defer ticker.Stop()
@@ -100,8 +99,8 @@ func (s *Scheduler) Start() {
 			case <-ticker.C:
 				s.triggerFetchCycle()
 			case <-s.stop:
-				log.Println("Scheduler received stop signal, shutting down ticker loop...")
-				close(s.fetchQueue) // Close queue to signal no more tasks
+				log.Println("[SCHEDULER] received stop signal, shutting down")
+				close(s.fetchQueue)
 				return
 			}
 		}
@@ -113,76 +112,71 @@ func (s *Scheduler) Start() {
 		for relayURL := range s.fetchQueue {
 			fetchRelayEvents(relayURL, s.stateMgr, s.db)
 		}
-		log.Println("Fetch queue closed, placeholder worker exiting.")
+		log.Println("[SCHEDULER] fetch worker exiting")
 	}()
 }
 
 func (s *Scheduler) Stop() {
-	log.Println("Stopping scheduler...")
+	log.Println("[SCHEDULER] stopping")
 
 	select {
 	case <-s.stop:
-		log.Println("Stop signal already sent.")
-		return // Already stopping
+		log.Println("[SCHEDULER] stop signal already sent")
+		return
 	default:
 		close(s.stop)
 	}
 
 	s.wg.Wait()
-	log.Println("Scheduler stopped.")
+	log.Println("[SCHEDULER] stopped")
 }
 
 func (s *Scheduler) triggerFetchCycle() {
-	log.Println("Triggering fetch cycle...")
+	log.Println("[SCHEDULER] triggering fetch cycle")
 	if len(s.config.Relays) == 0 {
-		log.Println("No relays configured, skipping fetch cycle.")
+		log.Println("[SCHEDULER] no relays configured, skipping fetch cycle")
 		return
 	}
 
 	for _, relayURL := range s.config.Relays {
-
 		select {
 		case s.fetchQueue <- relayURL:
-			log.Printf("Queued fetch for: %s", relayURL)
+			log.Printf("[SCHEDULER] queued fetch for: %s", relayURL)
 		case <-s.stop:
-			log.Println("Stop signal received during fetch cycle trigger, aborting queueing.")
+			log.Println("[SCHEDULER] stop signal received during fetch cycle")
 			return
 		default:
-
-			select {
-			case <-s.stop:
-			default:
-				log.Printf("Fetch queue is full, skipping queue for: %s", relayURL)
-			}
+			log.Printf("[SCHEDULER] fetch queue is full, skipping: %s", relayURL)
 		}
 	}
 }
 
 func fetchRelayEvents(relayURL string, stateMgr *StateManager, db *sql.DB) {
-	log.Printf("Starting fetch task for %s...", relayURL)
+	log.Printf("[FETCH] starting task for %s", relayURL)
 
-	// Use a longer timeout for initial fetches, especially since we're not limiting event counts
 	timeoutDuration := 10 * time.Minute
 	fetchCtx, cancel := context.WithTimeout(context.Background(), timeoutDuration)
 	defer cancel()
 
 	lastTs, err := stateMgr.GetLastTimestamp(relayURL)
 	if err != nil {
-		log.Printf("Error getting last timestamp for %s: %v", relayURL, err)
+		log.Printf("[ERROR] failed to get last timestamp for %s: %v", relayURL, err)
 		return
 	}
 
-	log.Printf("Connecting to relay %s...", relayURL)
+	log.Printf("[FETCH] last timestamp for %s: %v", relayURL, lastTs)
+	log.Printf("[FETCH] connecting to relay %s", relayURL)
+
 	relay, err := nostr.RelayConnect(fetchCtx, relayURL)
 	if err != nil {
-		log.Printf("Error connecting to %s: %v", relayURL, err)
-		return // Cannot proceed if connection fails
+		log.Printf("[ERROR] failed to connect to %s: %v", relayURL, err)
+		return
 	}
 
 	defer func() {
-		log.Printf("Closing connection to %s", relayURL)
+		log.Printf("[FETCH] closing connection to %s", relayURL)
 		if err := relay.Close(); err != nil {
-			log.Printf("Error closing relay connection %s: %v", relayURL, err)
+			log.Printf("[ERROR] failed to close relay connection %s: %v", relayURL, err)
 		}
 	}()
 
@@ -191,7 +185,7 @@ func fetchRelayEvents(relayURL string, stateMgr *StateManager, db *sql.DB) {
 
 	// For first-time fetches, we'll use a more robust approach with pagination
 	if lastTs.IsZero() {
-		log.Printf("First-time fetch for %s", relayURL)
+		log.Printf("[FETCH] first-time fetch for %s", relayURL)
 
 		// We'll use multiple time windows to maximize event collection
 		timeWindows := []struct {
@@ -227,7 +221,7 @@ func fetchRelayEvents(relayURL string, stateMgr *StateManager, db *sql.DB) {
 
 		// Process each time window
 		for _, window := range timeWindows {
-			log.Printf("Fetching %s events from %s (no limit)", window.name, relayURL)
+			log.Printf("[FETCH] fetching %s events from %s", window.name, relayURL)
 
 			// Create filter for this time window - no limit to get all available events
 			filter := nostr.Filter{
@@ -238,7 +232,7 @@ func fetchRelayEvents(relayURL string, stateMgr *StateManager, db *sql.DB) {
 			// Subscribe with this filter
 			sub, err := relay.Subscribe(fetchCtx, nostr.Filters{filter})
 			if err != nil {
-				log.Printf("Error subscribing to %s for %s events: %v", relayURL, window.name, err)
+				log.Printf("[ERROR] failed to subscribe to %s for %s events: %v", relayURL, window.name, err)
 				continue // Try next window
 			}
 
@@ -251,7 +245,7 @@ func fetchRelayEvents(relayURL string, stateMgr *StateManager, db *sql.DB) {
 			}
 		}
 
-		log.Printf("Completed robust initial fetch for %s", relayURL)
+		log.Printf("[FETCH] completed initial fetch for %s", relayURL)
 	} else {
 		// For subsequent fetches, use the regular approach with since filter
 		since := lastTs.Unix() + 1
@@ -261,11 +255,11 @@ func fetchRelayEvents(relayURL string, stateMgr *StateManager, db *sql.DB) {
 			Since: &sinceTimestamp,
 		}}
 
-		log.Printf("Subscribing to events on %s since %s", relayURL, time.Unix(since, 0).UTC())
+		log.Printf("[FETCH] subscribing to events on %s since %s", relayURL, time.Unix(since, 0).UTC())
 
 		sub, err := relay.Subscribe(fetchCtx, filters)
 		if err != nil {
-			log.Printf("Error subscribing to %s: %v", relayURL, err)
+			log.Printf("[ERROR] failed to subscribe to %s: %v", relayURL, err)
 			return
 		}
 
@@ -282,15 +276,15 @@ func fetchRelayEvents(relayURL string, stateMgr *StateManager, db *sql.DB) {
 	if maxTimestamp.After(lastTs) {
 		err = stateMgr.UpdateLastTimestamp(relayURL, maxTimestamp)
 		if err != nil {
-			log.Printf("Error updating state for %s to %s: %v", relayURL, maxTimestamp.UTC().Format(time.RFC3339), err)
+			log.Printf("[ERROR] failed to update state for %s to %s: %v", relayURL, maxTimestamp.UTC().Format(time.RFC3339), err)
 		} else {
-			log.Printf("Updated state for %s to %s", relayURL, maxTimestamp.UTC().Format(time.RFC3339))
+			log.Printf("[STATE] updated for %s to %s", relayURL, maxTimestamp.UTC().Format(time.RFC3339))
 		}
 	} else {
-		log.Printf("No new events found, state not updated for %s", relayURL)
+		log.Printf("[STATE] no new events, state not updated for %s", relayURL)
 	}
 
-	log.Printf("Finished fetch cycle for %s", relayURL)
+	log.Printf("[FETCH] finished cycle for %s", relayURL)
 }
 
 // Helper function to convert time.Time to nostr.Timestamp pointer
@@ -308,15 +302,15 @@ eventLoop:
 		select {
 		case ev := <-sub.Events:
 			if ev == nil {
-				log.Printf("Received nil event from %s, skipping", relayURL)
+				log.Printf("[FETCH] received nil event from %s, skipping", relayURL)
 				continue
 			}
 
 			eventTime := time.Unix(int64(ev.CreatedAt), 0)
 
-			processErr := processEvent(ev, db)
+			processErr := processEvent(ev, relayURL, db)
 			if processErr != nil {
-				log.Printf("Error processing event %s from %s: %v", ev.ID, relayURL, processErr)
+				log.Printf("[ERROR] failed to process event %s from %s: %v", ev.ID, relayURL, processErr)
 			} else {
 				if eventTime.After(maxTimestamp) {
 					maxTimestamp = eventTime
@@ -324,15 +318,15 @@ eventLoop:
 			}
 
 		case reason := <-sub.ClosedReason:
-			log.Printf("Subscription closed for %s: %s", relayURL, reason)
+			log.Printf("[FETCH] subscription closed for %s: %s", relayURL, reason)
 			break eventLoop
 
 		case <-sub.EndOfStoredEvents:
-			log.Printf("Received EOSE (End Of Stored Events) from %s", relayURL)
+			log.Printf("[FETCH] received EOSE from %s", relayURL)
 			break eventLoop
 
 		case <-ctx.Done():
-			log.Printf("Fetch context cancelled/timed out for %s: %v", relayURL, ctx.Err())
+			log.Printf("[FETCH] context cancelled for %s: %v", relayURL, ctx.Err())
 			break eventLoop
 		}
 	}
@@ -340,7 +334,7 @@ eventLoop:
 	return maxTimestamp
 }
 
-func processEvent(event *nostr.Event, db *sql.DB) error {
+func processEvent(event *nostr.Event, relayURL string, db *sql.DB) error {
 
 	// Marshal tags to JSON string
 	tagsJSON, err := json.Marshal(event.Tags)
@@ -350,14 +344,15 @@ func processEvent(event *nostr.Event, db *sql.DB) error {
 	}
 
 	_, err = db.ExecContext(context.Background(),
-		`INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, relay_url)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		event.ID,
 		event.PubKey,
 		time.Unix(int64(event.CreatedAt), 0),
 		event.Kind,
 		string(tagsJSON),
-		event.Content)
+		event.Content,
+		relayURL)
 
 	if err != nil {
 
@@ -368,58 +363,58 @@ func processEvent(event *nostr.Event, db *sql.DB) error {
 }
 
 func main() {
-	log.Println("Starting Nostr Relay Monitor...")
+	log.Println("[MAIN] starting nostr relay monitor")
 
 	mcpMode := flag.Bool("mcp", false, "Run in MCP stdio mode for direct LLM integration")
 	configPath := flag.String("config", "config.yaml", "Path to configuration file")
 	flag.Parse()
 
-	// Load configuration
 	config, err := loadConfig(*configPath)
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		log.Fatalf("[ERROR] failed to load configuration: %v", err)
 	}
 
-	log.Printf("Configuration loaded: %+v", config)
-	log.Printf("Fetch interval: %d minutes", config.FetchIntervalMinutes)
-	log.Printf("Database path: %s", config.DatabasePath)
-	log.Printf("Relays to monitor: %v", config.Relays)
+	log.Printf("[CONFIG] loaded: %+v", config)
+	log.Printf("[CONFIG] fetch interval: %d minutes", config.FetchIntervalMinutes)
+	log.Printf("[CONFIG] database path: %s", config.DatabasePath)
+	log.Printf("[CONFIG] relays to monitor: %v", config.Relays)
 
 	db, err := initDB(config.DatabasePath)
 	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		log.Fatalf("[ERROR] failed to initialize database: %v", err)
 	}
 	defer db.Close()
-	log.Println("Database initialized successfully.")
+	log.Println("[MAIN] database initialized")
 
 	stateMgr := NewStateManager(db)
-	log.Println("State Manager initialized.")
+	log.Println("[MAIN] state manager initialized")
 
 	analytics := NewAnalytics(db)
-	log.Println("Analytics component initialized.")
+	log.Println("[MAIN] analytics component initialized")
+
+	scheduler := NewScheduler(config, stateMgr, db)
+	scheduler.Start()
 
 	mcpServer := NewMCPServer(analytics)
 
 	if *mcpMode {
-
+		log.Println("[MAIN] starting in MCP mode with background scheduler")
 		if err := mcpServer.StartStdio(); err != nil {
-			log.Fatalf("MCP server error: %v", err)
+			log.Fatalf("[ERROR] MCP server error: %v", err)
 		}
 		return
 	}
-	scheduler := NewScheduler(config, stateMgr, db)
-	scheduler.Start()
 
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
-	log.Println("Setup signal handling. Press Ctrl+C to exit.")
+	log.Println("[MAIN] signal handling setup, press Ctrl+C to exit")
 
 	sig := <-shutdown
-	log.Printf("Received signal: %v. Shutting down...", sig)
+	log.Printf("[MAIN] received signal: %v, shutting down", sig)
 
 	scheduler.Stop()
 
-	log.Println("Nostr Relay Monitor stopped gracefully.")
+	log.Println("[MAIN] stopped gracefully")
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -468,7 +463,8 @@ func initDB(dbPath string) (*sql.DB, error) {
 		created_at TIMESTAMP NOT NULL,
 		kind INTEGER NOT NULL,
 		tags JSON,
-		content TEXT NOT NULL
+		content TEXT NOT NULL,
+		relay_url TEXT
 	);`
 
 	_, err = db.Exec(createEventsTableSQL)

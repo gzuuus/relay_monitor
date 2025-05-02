@@ -16,7 +16,6 @@ func NewAnalytics(db *sql.DB) *Analytics {
 }
 
 func (a *Analytics) EventCountByKind(ctx context.Context) (map[int]int, error) {
-
 	return a.EventCountByKindWithTimeFilter(ctx, AllTime)
 }
 
@@ -36,7 +35,6 @@ func (a *Analytics) TopAuthors(ctx context.Context, limit int, filter TimeFilter
 		LIMIT ?
 	`, timeCondition)
 
-	// Combine args with limit
 	queryArgs := []any{}
 	if args != nil {
 		queryArgs = append(queryArgs, args...)
@@ -78,7 +76,6 @@ func (a *Analytics) TopAuthorsByKind(ctx context.Context, kind int, limit int, f
 		LIMIT ?
 	`, timeCondition)
 
-	// Combine args with kind and limit
 	queryArgs := []any{kind}
 	if args != nil {
 		queryArgs = append(queryArgs, args...)
@@ -125,12 +122,10 @@ func (a *Analytics) EventCountByTimeRange(ctx context.Context, interval string, 
 		return nil, fmt.Errorf("unsupported interval: %s", interval)
 	}
 
-	// Build the query with optional kind filter
 	var query string
-	var args []interface{}
+	var args []any
 
 	if kind != nil {
-		// Filter by specific kind
 		query = fmt.Sprintf(`
 			SELECT %s as time_bucket, COUNT(*) as count
 			FROM events
@@ -141,7 +136,6 @@ func (a *Analytics) EventCountByTimeRange(ctx context.Context, interval string, 
 		`, timeFormat)
 		args = append(args, *kind, limit)
 	} else {
-		// No kind filter
 		query = fmt.Sprintf(`
 			SELECT %s as time_bucket, COUNT(*) as count
 			FROM events
@@ -193,7 +187,6 @@ const (
 	AllTime     TimeFilter = "all_time"
 )
 
-// getTimeThreshold returns the time threshold for a given filter
 func getTimeThreshold(filter TimeFilter) time.Time {
 	now := time.Now()
 	switch filter {
@@ -208,8 +201,7 @@ func getTimeThreshold(filter TimeFilter) time.Time {
 	}
 }
 
-// getTimeFilterCondition returns the SQL condition for a time filter
-func getTimeFilterCondition(filter TimeFilter) (string, []interface{}) {
+func getTimeFilterCondition(filter TimeFilter) (string, []any) {
 	if filter == AllTime {
 		return "1=1", nil
 	}
@@ -218,56 +210,75 @@ func getTimeFilterCondition(filter TimeFilter) (string, []interface{}) {
 	return "created_at >= ?", []any{threshold}
 }
 
-func (a *Analytics) RelayStats(ctx context.Context, filter TimeFilter) (map[string]interface{}, error) {
+func (a *Analytics) RelayStats(ctx context.Context, filter TimeFilter) (map[string]any, error) {
 	timeCondition, args := getTimeFilterCondition(filter)
 
-	// Build the query with placeholders
-	query := fmt.Sprintf(`
-		SELECT 
-			relay_url, 
-			last_timestamp,
-			(SELECT COUNT(*) FROM events WHERE %[1]s) as total_events,
-			(SELECT COUNT(DISTINCT pubkey) FROM events WHERE %[1]s) as unique_authors,
-			(SELECT COUNT(DISTINCT kind) FROM events WHERE %[1]s) as unique_kinds
-		FROM relay_state
-	`, timeCondition)
-
-	// Create a combined args array for all the subqueries
-	queryArgs := []any{}
-	if args != nil {
-		// Add args for each subquery that uses the time condition
-		queryArgs = append(queryArgs, args...)
-		queryArgs = append(queryArgs, args...)
-		queryArgs = append(queryArgs, args...)
-	}
-
-	rows, err := a.db.QueryContext(ctx, query, queryArgs...)
+	relayQuery := `SELECT relay_url, last_timestamp FROM relay_state`
+	relayRows, err := a.db.QueryContext(ctx, relayQuery)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query relay stats: %w", err)
+		return nil, fmt.Errorf("failed to query relay info: %w", err)
 	}
-	defer rows.Close()
+	defer relayRows.Close()
 
-	stats := make(map[string]interface{})
 	relays := make(map[string]time.Time)
-
-	var totalEvents, uniqueAuthors, uniqueKinds int
-
-	for rows.Next() {
+	for relayRows.Next() {
 		var relayURL string
 		var lastTimestamp time.Time
-
-		if err := rows.Scan(&relayURL, &lastTimestamp, &totalEvents, &uniqueAuthors, &uniqueKinds); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
+		if err := relayRows.Scan(&relayURL, &lastTimestamp); err != nil {
+			return nil, fmt.Errorf("failed to scan relay row: %w", err)
 		}
-
 		relays[relayURL] = lastTimestamp
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rows: %w", err)
+	statsQuery := fmt.Sprintf(`
+		SELECT 
+			COUNT(*) as total_events,
+			COUNT(DISTINCT pubkey) as unique_authors,
+			COUNT(DISTINCT kind) as unique_kinds
+		FROM events
+		WHERE %s
+	`, timeCondition)
+
+	var totalEvents, uniqueAuthors, uniqueKinds int
+	err = a.db.QueryRowContext(ctx, statsQuery, args...).Scan(&totalEvents, &uniqueAuthors, &uniqueKinds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query event stats: %w", err)
 	}
 
+	relayStatsQuery := fmt.Sprintf(`
+		SELECT 
+			relay_url,
+			COUNT(*) as event_count,
+			COUNT(DISTINCT pubkey) as author_count,
+			COUNT(DISTINCT kind) as kind_count
+		FROM events
+		WHERE %s AND relay_url IS NOT NULL
+		GROUP BY relay_url
+	`, timeCondition)
+
+	relayStatsRows, err := a.db.QueryContext(ctx, relayStatsQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query per-relay stats: %w", err)
+	}
+	defer relayStatsRows.Close()
+
+	relayStats := make(map[string]map[string]int)
+	for relayStatsRows.Next() {
+		var relayURL string
+		var eventCount, authorCount, kindCount int
+		if err := relayStatsRows.Scan(&relayURL, &eventCount, &authorCount, &kindCount); err != nil {
+			return nil, fmt.Errorf("failed to scan relay stats row: %w", err)
+		}
+		relayStats[relayURL] = map[string]int{
+			"event_count":  eventCount,
+			"author_count": authorCount,
+			"kind_count":   kindCount,
+		}
+	}
+
+	stats := make(map[string]any)
 	stats["relays"] = relays
+	stats["relay_stats"] = relayStats
 	stats["total_events"] = totalEvents
 	stats["unique_authors"] = uniqueAuthors
 	stats["unique_kinds"] = uniqueKinds
