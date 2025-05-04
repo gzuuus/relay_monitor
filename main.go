@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -22,6 +23,7 @@ type Config struct {
 	Relays               []string `yaml:"relays"`
 	FetchIntervalMinutes int      `yaml:"fetch_interval_minutes"`
 	DatabasePath         string   `yaml:"database_path"`
+	BlacklistedPubkeys   []string `yaml:"blacklisted_pubkeys"`
 }
 
 type StateManager struct {
@@ -110,7 +112,7 @@ func (s *Scheduler) Start() {
 	go func() {
 		defer s.wg.Done()
 		for relayURL := range s.fetchQueue {
-			fetchRelayEvents(relayURL, s.stateMgr, s.db)
+			fetchRelayEvents(relayURL, s.stateMgr, s.db, s.config)
 		}
 		log.Println("[SCHEDULER] fetch worker exiting")
 	}()
@@ -151,7 +153,7 @@ func (s *Scheduler) triggerFetchCycle() {
 	}
 }
 
-func fetchRelayEvents(relayURL string, stateMgr *StateManager, db *sql.DB) {
+func fetchRelayEvents(relayURL string, stateMgr *StateManager, db *sql.DB, config *Config) {
 	log.Printf("[FETCH] starting task for %s", relayURL)
 
 	timeoutDuration := 10 * time.Minute
@@ -237,7 +239,7 @@ func fetchRelayEvents(relayURL string, stateMgr *StateManager, db *sql.DB) {
 			}
 
 			// Process events from this window
-			windowMaxTs := processSubscription(sub, fetchCtx, relayURL, db)
+			windowMaxTs := processSubscription(sub, fetchCtx, relayURL, db, config)
 
 			// Update max timestamp if needed
 			if windowMaxTs.After(maxTimestamp) {
@@ -264,7 +266,7 @@ func fetchRelayEvents(relayURL string, stateMgr *StateManager, db *sql.DB) {
 		}
 
 		// Process events using the regular approach
-		subMaxTs := processSubscription(sub, fetchCtx, relayURL, db)
+		subMaxTs := processSubscription(sub, fetchCtx, relayURL, db, config)
 
 		// Update max timestamp if needed
 		if subMaxTs.After(maxTimestamp) {
@@ -294,7 +296,7 @@ func nostrTimestampPtr(t time.Time) *nostr.Timestamp {
 }
 
 // Process events from a subscription and return the max timestamp
-func processSubscription(sub *nostr.Subscription, ctx context.Context, relayURL string, db *sql.DB) time.Time {
+func processSubscription(sub *nostr.Subscription, ctx context.Context, relayURL string, db *sql.DB, config *Config) time.Time {
 	maxTimestamp := time.Time{}
 
 eventLoop:
@@ -303,6 +305,12 @@ eventLoop:
 		case ev := <-sub.Events:
 			if ev == nil {
 				log.Printf("[FETCH] received nil event from %s, skipping", relayURL)
+				continue
+			}
+
+			// Check if the pubkey is blacklisted
+			if slices.Contains(config.BlacklistedPubkeys, ev.PubKey) {
+				log.Printf("[FILTER] skipping event %s from blacklisted pubkey %s", ev.ID, ev.PubKey)
 				continue
 			}
 
@@ -335,11 +343,9 @@ eventLoop:
 }
 
 func processEvent(event *nostr.Event, relayURL string, db *sql.DB) error {
-
 	// Marshal tags to JSON string
 	tagsJSON, err := json.Marshal(event.Tags)
 	if err != nil {
-
 		return fmt.Errorf("failed to marshal tags for event %s: %w", event.ID, err)
 	}
 
@@ -355,7 +361,6 @@ func processEvent(event *nostr.Event, relayURL string, db *sql.DB) error {
 		relayURL)
 
 	if err != nil {
-
 		return fmt.Errorf("failed to insert event %s: %w", event.ID, err)
 	}
 

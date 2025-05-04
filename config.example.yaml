@@ -12,3 +12,8 @@ fetch_interval_minutes: 5
 
 # Path to the DuckDB database file
 database_path: ./nostr_events.db
+
+# List of pubkeys to exclude from event collection
+blacklisted_pubkeys:
+  - 0000000000000000000000000000000000000000000000000000000000000000
+  - 1111111111111111111111111111111111111111111111111111111111111111
