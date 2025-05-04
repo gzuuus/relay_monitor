@@ -15,13 +15,23 @@ func NewAnalytics(db *sql.DB) *Analytics {
 	return &Analytics{db: db}
 }
 
-func (a *Analytics) EventCountByKind(ctx context.Context) (map[int]int, error) {
+func (a *Analytics) EventCountByKind(ctx context.Context) ([]KindStats, error) {
 	return a.EventCountByKindWithTimeFilter(ctx, AllTime)
 }
 
 type AuthorStats struct {
 	PubKey string `json:"pubkey"`
 	Count  int    `json:"count"`
+}
+
+type TimeStats struct {
+	Time  string `json:"time"`
+	Count int    `json:"count"`
+}
+
+type KindStats struct {
+	Kind  int `json:"kind"`
+	Count int `json:"count"`
 }
 
 func (a *Analytics) TopAuthors(ctx context.Context, limit int, filter TimeFilter) ([]AuthorStats, error) {
@@ -106,7 +116,7 @@ func (a *Analytics) TopAuthorsByKind(ctx context.Context, kind int, limit int, f
 	return results, nil
 }
 
-func (a *Analytics) EventCountByTimeRange(ctx context.Context, interval string, limit int, kind *int) (map[string]int, error) {
+func (a *Analytics) EventCountByTimeRange(ctx context.Context, interval string, limit int, kind *int) ([]TimeStats, error) {
 	var timeFormat string
 
 	switch interval {
@@ -152,14 +162,17 @@ func (a *Analytics) EventCountByTimeRange(ctx context.Context, interval string, 
 	}
 	defer rows.Close()
 
-	results := make(map[string]int)
+	var results []TimeStats
 	for rows.Next() {
 		var timeBucket string
 		var count int
 		if err := rows.Scan(&timeBucket, &count); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
-		results[timeBucket] = count
+		results = append(results, TimeStats{
+			Time:  timeBucket,
+			Count: count,
+		})
 	}
 
 	if err := rows.Err(); err != nil {
@@ -287,7 +300,7 @@ func (a *Analytics) RelayStats(ctx context.Context, filter TimeFilter) (map[stri
 	return stats, nil
 }
 
-func (a *Analytics) EventCountByKindWithTimeFilter(ctx context.Context, filter TimeFilter) (map[int]int, error) {
+func (a *Analytics) EventCountByKindWithTimeFilter(ctx context.Context, filter TimeFilter) ([]KindStats, error) {
 	timeCondition, args := getTimeFilterCondition(filter)
 	query := fmt.Sprintf(`
 		SELECT kind, COUNT(*) as count
@@ -303,13 +316,16 @@ func (a *Analytics) EventCountByKindWithTimeFilter(ctx context.Context, filter T
 	}
 	defer rows.Close()
 
-	results := make(map[int]int)
+	var results []KindStats
 	for rows.Next() {
 		var kind, count int
 		if err := rows.Scan(&kind, &count); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
-		results[kind] = count
+		results = append(results, KindStats{
+			Kind:  kind,
+			Count: count,
+		})
 	}
 
 	if err := rows.Err(); err != nil {

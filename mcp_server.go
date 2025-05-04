@@ -115,17 +115,9 @@ func getTimeFilter(request mcp.CallToolRequest) TimeFilter {
 func (m *MCPServer) handleEventCountByKind(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	timeFilter := getTimeFilter(request)
 	
-	counts, err := m.analytics.EventCountByKindWithTimeFilter(ctx, timeFilter)
+	results, err := m.analytics.EventCountByKindWithTimeFilter(ctx, timeFilter)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("error getting event counts: %v", err)), nil
-	}
-
-	var results []map[string]any
-	for kind, count := range counts {
-		results = append(results, map[string]any{
-			"kind":  kind,
-			"count": count,
-		})
 	}
 
 	return jsonResult(results)
@@ -189,12 +181,12 @@ func (m *MCPServer) handleEventCountByTime(ctx context.Context, request mcp.Call
 	limit := getIntParam(request, "limit", 20)
 	kindPtr := getOptionalIntParam(request, "kind")
 
-	counts, err := m.analytics.EventCountByTimeRange(ctx, interval, limit, kindPtr)
+	results, err := m.analytics.EventCountByTimeRange(ctx, interval, limit, kindPtr)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("error getting event counts by time: %v", err)), nil
 	}
 
-	return jsonResult(counts)
+	return jsonResult(results)
 }
 
 func (m *MCPServer) handleRelayStats(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
