@@ -5,10 +5,9 @@
 relays:
   - wss://relay1.com
   - wss://relay2.com
-  - wss://relay3.com
 
-# Interval between fetch cycles (in minutes)
-fetch_interval_minutes: 5
+# Interval for batching events before flushing to DuckDB (in minutes)
+batch_flush_interval_minutes: 5
 
 # Path to the DuckDB database file
 database_path: ./nostr_events.db
